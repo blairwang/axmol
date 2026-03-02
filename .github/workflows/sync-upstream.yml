@@ -1,0 +1,60 @@
+name: Sync upstream branches (mirror)
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # 每天 UTC 03:00 运行一次，按需调整
+  workflow_dispatch:       # 支持手动触发
+  # push:                  # 如需在你提交后也同步，可开启 push 触发
+
+permissions:
+  contents: write          # 允许使用 GITHUB_TOKEN 推送到当前仓库
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 需要完整历史以便 reset/rebase
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/axmolengine/axmol.git
+          git fetch upstream --prune
+
+      - name: Define branches to sync
+        id: vars
+        run: |
+          # 用空格列出要同步的分支
+          echo "BRANCHES='dev release/2.x'" >> $GITHUB_OUTPUT
+
+      - name: Sync branches (mirror reset)
+        run: |
+          for b in ${{ steps.vars.outputs.BRANCHES }}; do
+            echo "==> Syncing branch: $b"
+            # 如果本地不存在该分支，创建并跟踪 upstream/$b
+            if ! git show-ref --verify --quiet refs/heads/$b; then
+              git checkout -b "$b" "upstream/$b" || {
+                echo "Branch $b not found in upstream, skipping."; continue;
+              }
+            else
+              git checkout "$b"
+              # 确保有对应的上游分支
+              if git show-ref --verify --quiet refs/remotes/upstream/$b; then
+                # 将本分支重置为上游分支（完全镜像）
+                git reset --hard "upstream/$b"
+              else
+                echo "Upstream branch $b missing, skipping reset."
+                continue
+              }
+            fi
+
+            # 推送到 origin。镜像场景下可能需要强推。
+            git push origin "$b" --force
+          done
